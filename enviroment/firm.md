@@ -15,6 +15,7 @@
   - `binwalk -Me --run-as=root ./DIR820LA1_FW105B03.bin`
 - root
   - `sudo su`
+  - `sudo ./run.sh -r DIR820L /home/iotsec/DIR820LA1_FW105B03.bin`
 - browser
   - `http://192.168.0.1/login.asp`
 
