@@ -14,7 +14,7 @@ systemctl --user disable gnome-remote-desktop
   - `sudo systemctl enable --now xrdp`
   - `sudo systemctl status xrdp`
 - log out
-
+- `xfreerdp3 /u:'rdp' /p:'rdp' /v:192.168.31.164 +clipboard /drive:shared,/home/kali/Desktop /dynamic-resolution /cert:ignore`  
 - burpsuite
   - `https://portswigger.net/burp/downloads`
   - `chmod +x burpsuite_linux_v2026_4_3.sh`
