@@ -1,0 +1,101 @@
+```
+import asyncio
+import socket
+
+# --- 設定部分 ---
+LISTEN_HOST = '0.0.0.0'
+LISTEN_PORT = 443
+
+TARGET_HOST = '192.168.31.154'
+# 1回目〜9回目までの転送先ポートリスト (1443, 2443, ..., 9443)
+TARGET_PORTS = [1443, 2443, 3443, 4443, 5443, 6443, 7443, 8443, 9443]
+
+# 現在の振り分け位置を記憶する変数とロック
+current_index = 0
+index_lock = asyncio.Lock()
+
+async def get_next_port():
+    """次に転送するポート番号をラウンドロビンで取得する"""
+    global current_index
+    async with index_lock:
+        port = TARGET_PORTS[current_index]
+        # 9個目まで行ったら1個目(インデックス0)に戻す
+        current_index = (current_index + 1) % len(TARGET_PORTS)
+        return port
+
+def enable_keepalive(writer: asyncio.StreamWriter):
+    """セッション切れを防ぐためにTCPキープアライブを有効にする"""
+    sock = writer.get_extra_info('socket')
+    if sock is not None:
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            # Linuxの場合、さらに詳細なキープアライブ設定が可能（必要に応じて有効化）
+            # sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+            # sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+            # sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)
+        except Exception as e:
+            print(f"[!] キープアライブ設定エラー: {e}")
+
+async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    """片方向のデータをひたすら転送し続ける（セッション維持の要）"""
+    try:
+        while True:
+            data = await reader.read(4096)
+            if not data:
+                break # データが空なら切断されたとみなす
+            writer.write(data)
+            await writer.drain()
+    except Exception:
+        pass
+    finally:
+        writer.close()
+
+async def handle_client(local_reader: asyncio.StreamReader, local_writer: asyncio.StreamWriter):
+    """クライアントから接続があった際の処理"""
+    client_addr = local_writer.get_extra_info('peername')
+    target_port = await get_next_port()
+    print(f"[+] 接続受信: {client_addr} -> 転送先: {TARGET_HOST}:{target_port}")
+
+    # クライアント側のTCPキープアライブを有効化
+    enable_keepalive(local_writer)
+
+    try:
+        # 転送先（192.168.0.1の指定ポート）へ接続
+        remote_reader, remote_writer = await asyncio.open_connection(TARGET_HOST, target_port)
+    except Exception as e:
+        print(f"[-] 転送先への接続に失敗しました ({TARGET_HOST}:{target_port}): {e}")
+        local_writer.close()
+        return
+
+    # サーバー側のTCPキープアライブも有効化
+    enable_keepalive(remote_writer)
+
+    # クライアント⇔サーバー間の双方向パイプを同時に実行
+    task_c2s = asyncio.create_task(pipe(local_reader, remote_writer)) # クライアント -> サーバー
+    task_s2c = asyncio.create_task(pipe(remote_reader, local_writer)) # サーバー -> クライアント
+
+    # どちらかの通信が終了するまで待機（セッション維持）
+    await asyncio.gather(task_c2s, task_s2c)
+    print(f"[*] セッション終了: {client_addr}")
+
+async def main():
+    # サーバーの起動
+    server = await asyncio.start_server(handle_client, LISTEN_HOST, LISTEN_PORT)
+    addr = server.sockets[0].getsockname()
+    print(f"[*] ポートフォワーダー起動: {addr} で待機中...")
+    print(f"[*] 転送先リスト: {TARGET_PORTS}")
+
+    async with server:
+        await server.serve_forever()
+
+if __name__ == '__main__':
+    # Windowsでのおまじない（イベントループのポリシー設定）
+    import sys
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n[*] プログラムを終了します")
+```
