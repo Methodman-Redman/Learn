@@ -73,6 +73,10 @@ ccp_act=set&old_ip=192.168.0.1&old_mask=255.255.255.0&new_ip=192.168.0.1&new_mas
 
 - `telnet 192.168.0.1 8000`
 - `https://www.ctfiot.com/82596.html`
+- `https://unit42.paloaltonetworks.com/ja/moobot-d-link-devices/?pdf=print&lg=ja&_wpnonce=dea4c18389`
+- `https://github.com/kkx600/cve_info_data/blob/ccaed4b94ba762eb8a8e003bfa762a7754b8182e/Vuln/Vuln/DIR-820L/command_execution_0/README.md`
+
+
 
 - https://kb.netgear.com/000062303/WAC104-Firmware-Version-1-0-4-13
 - https://mdr.skyeye.qianxin.com/forum/share/1806
