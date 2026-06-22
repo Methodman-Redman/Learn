@@ -72,6 +72,7 @@ ccp_act=set&old_ip=192.168.0.1&old_mask=255.255.255.0&new_ip=192.168.0.1&new_mas
 ```
 
 - `telnet 192.168.0.1 8000`
+- `https://www.ctfiot.com/82596.html`
 
 - https://kb.netgear.com/000062303/WAC104-Firmware-Version-1-0-4-13
 - https://mdr.skyeye.qianxin.com/forum/share/1806
