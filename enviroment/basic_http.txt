@@ -1,0 +1,88 @@
+## Enviroment
+#### ディレクトリ構成:
+```
+basic-auth-test/
+├── docker-compose.yml
+├── nginx.conf
+├── .htpasswd
+└── public/
+    ├── test.txt
+    ├── sample.bin
+    └── firmware.img
+```
+#### docker-compose.yml
+```
+version: "3.8"
+
+services:
+  web:
+    image: nginx:alpine
+    container_name: basic-auth-test
+    ports:
+      - "8080:80"
+    volumes:
+      - ./public:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./.htpasswd:/etc/nginx/.htpasswd:ro
+    restart: unless-stopped
+```
+
+#### nginx.conf
+```
+server {
+    listen 80;
+    server_name _;
+
+    location / {
+        auth_basic "Restricted Area";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+
+        root /usr/share/nginx/html;
+        autoindex on;
+    }
+}
+```
+- autoindex on;を有効にしているので、`http://localhost:8080/`へアクセスするとディレクトリ一覧が表示
+
+#### .htpasswd
+- パスワードを生成
+```
+docker run --rm httpd:2.4-alpine \
+    htpasswd -nbB testuser testpass
+```
+- 出力例
+  `testuser:$2y$05$...`
+  - これを .htpasswd に保存。
+
+#### テスト用ファイル
+```
+mkdir public
+echo "hello world" > public/test.txt
+dd if=/dev/urandom of=public/sample.bin bs=1M count=10
+```
+#### 起動
+- `docker compose up -d`
+
+## Download
+#### curl の場合
+- 方法1: -u オプション
+  - `curl -u username:password -o sample.bin https://example.com/file.bin`
+    - -u : Basic認証のユーザー名とパスワード
+    - -o : 保存ファイル名
+- 方法2: URLに埋め込む
+  - `curl -o sample.bin https://username:password@example.com/file.bin`
+- 方法3: パスワードだけ後入力
+  - `curl -u username -o sample.bin https://example.com/file.bin`
+#### wget の場合
+- 方法1: オプション指定
+  - `wget --user=username --password=password -O sample.bin https://example.com/file.bin`
+- 方法2: パスワード非表示
+  - `wget --user=username --ask-password -O sample.bin https://example.com/file.bin`
+  - 実行時にパスワード入力
+
+#### リダイレクトがある場合
+- `curl -L -u username:password -o sample.bin https://example.com/file.bin`
+
+#### 最高
+- 認証情報をコマンドラインに直接書ない
+  - `curl -u "$USER:$PASS" -o file.bin https://example.com/file.bin`
