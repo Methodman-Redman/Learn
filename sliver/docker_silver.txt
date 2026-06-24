@@ -1,0 +1,71 @@
+## Dockerfile
+- `https://github.com/BishopFox/sliver/blob/master/Dockerfile`
+- 公式の Dockerfile を見ると、これはマルチステージビルド（Goのソースコードをコンテナ内でビルドしてから実行用コンテナを作る構成）になっており、最終的に /opt/sliver/sliver-server が配置
+- これを「普通にローカルにインストールしたのと同じ状態」で使うための docker-compose.yml の書き方と、ディレクトリ構成
+
+## 構成
+```
+sliver-docker/
+├── Dockerfile          # GitHubからコピーしたDockerfile
+└── docker-compose.yml  # 新しく作成するファイル
+```
+
+## docker-compose.yml
+```
+version: '3.8'
+
+services:
+  sliver:
+    build: .  # 同じフォルダにあるDockerfileを使ってビルドする
+    container_name: sliver-server
+    restart: unless-stopped
+    
+    # C2通信やクライアント接続で使用するポートをホストにマッピング
+    ports:
+      - "31337:31337" # sliver-clientの接続用（マルチプレイヤーモードに必須）
+      - "80:80"       # HTTPビーコン用
+      - "443:443"     # HTTPSビーコン用
+      - "8888:8888"   # その他の配信用など（必要に応じて増減してください）
+
+    # データの永続化とホストとのファイル共有
+    volumes:
+      - ./sliver-client:/root/.sliver-client  # クライアント用データ
+      - ./sliver-assets:/root/.sliver         # サーバーの設定や認証局データ
+      - ./output:/output                      # 生成したペイロードの取り出し用
+
+    # コンテナが勝手に終了するのを防ぎ、インタラクティブに操作できるようにする
+    tty: true
+    stdin_open: true
+```
+
+## 起動
+- `docker compose up -d --build`
+
+## ローカルと同じように使う方法（操作）
+- `docker exec -it sliver-server /opt/sliver/sliver-server`
+  - コンテナ内で直接 Sliver サーバーのコンソールを開いて操作したい場合は、以下のコマンドを実行します。
+  - 💡 重要（ファイルの取り出し方）:
+    `sliver > generate --mtls 127.0.0.1 --save /output`
+    - ペイロードを生成する際の保存先を /output に指定してください。そうすることで、ホストマシンのローカルにある ./output フォルダに自動的にファイルが同期され、簡単に取り出せます。      
+
+## ホストマシンの sliver-client から接続したい場合
+- `docker exec -it sliver-server /opt/sliver/sliver-server operator --name my_local_pc --lhost 127.0.0.1 --save /output/my_local_pc.cfg`     
+  - これでホスト側の ./output/my_local_pc.cfg に設定ファイルが書き出されるので、ホスト側の sliver-client でそれをインポートすれば、完全に「リモートのC2サーバーに手元のクライアントから接続する」という本番同様の運用が可能になります。
+      
+## sliver-client で my_local_pc.cfg をインポートする方法
+- ホストマシン（ご自身のPC）に sliver-client がインストールされている前提で、以下の手順で行います。
+  - まず、ターミナルで ./output ディレクトリがある場所まで移動し、import コマンドを使って設定ファイルを読み込ませます。      
+```
+# 1. 設定ファイルをインポートする（初回のみ）
+sliver-client import ./output/my_local_pc.cfg
+
+# 2. sliver-client を起動する
+sliver-client      
+```
+- sliver-client を起動すると、インポートされた設定を使って自動的にDockerコンテナ内のサーバーへ接続が試みられます。      
+
+## /output などのフォルダは自分で作る必要がある？
+- Docker Compose（docker-compose.yml）の volumes: セクションに ./output や ./sliver-assets のように相対パスを書いている場合、Dockerが「ホスト側にそのフォルダがない」と判断すると、自動的にフォルダを新規作成してコンテナと同期（マウント）してくれます。
+- ⚠️ Linux環境（Ubuntuなど）での注意点
+  - Dockerが自動でフォルダを作成した場合、そのフォルダの所有者が root ユーザーになってしまうことがあります。
+もしホスト側で ./output 内のファイルが編集できない・削除できないといった権限エラーが出た場合は、手動で mkdir output を作っておくか、作成された後に sudo chown -R $USER:$USER ./output で権限を変更してください。      
