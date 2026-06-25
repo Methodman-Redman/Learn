@@ -1,2 +1,3 @@
 - `https://blog.nflabs.jp/entry/2025/12/24/120000`
 - `https://maldevacademy.com/`
+- `https://blog.deephacking.tech/en/posts/maldevacademy-offensive-phishing-operations-review/`
