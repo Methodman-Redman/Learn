@@ -1,3 +1,5 @@
 - `https://blog.nflabs.jp/entry/2025/12/24/120000`
 - `https://maldevacademy.com/`
 - `https://blog.deephacking.tech/en/posts/maldevacademy-offensive-phishing-operations-review/`
+- `https://github.com/kgretzky/evilginx2`
+- `https://qiita.com/furafura_infra/items/d24b47f62dde4e58bc6f`
