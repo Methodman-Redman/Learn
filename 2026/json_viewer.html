@@ -11,9 +11,16 @@
         .header-container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 20px; }
         h2 { margin-top: 0; color: #217346; display: flex; align-items: center; gap: 10px; }
         
-        #drop-zone { border: 2px dashed #217346; padding: 30px; text-align: center; background: #f9fbf9; border-radius: 6px; cursor: pointer; transition: all 0.3s; }
+        /* レイアウト調整：ドロップエリアとボタンを横並びに */
+        .action-area { display: flex; gap: 15px; margin-top: 15px; align-items: center; flex-wrap: wrap; }
+        #drop-zone { border: 2px dashed #217346; padding: 30px; text-align: center; background: #f9fbf9; border-radius: 6px; cursor: pointer; transition: all 0.3s; flex: 1; min-width: 300px; }
         #drop-zone.hover { background: #eaf2ed; border-color: #1a5c38; }
         #file-input { display: none; }
+        
+        /* ダウンロードボタンのスタイリング（初期状態は非表示） */
+        .download-btn { background: #217346; color: white; border: none; padding: 12px 24px; font-size: 14px; font-weight: bold; border-radius: 6px; cursor: pointer; display: none; transition: background 0.2s; box-shadow: 0 2px 5px rgba(0,0,0,0.1); height: fit-content; }
+        .download-btn:hover { background: #1a5c38; }
+        .download-btn:active { background: #14452b; }
         
         .stats { margin-top: 10px; font-size: 14px; color: #666; }
         
@@ -35,14 +42,17 @@
 <body>
 
     <div class="header-container">
-        <h2>⚡ JSON エクセル風ビューア</h2>
-        <div id="drop-zone" onclick="document.getElementById('file-input').click()">
-            ここにJSONファイルをドラッグ＆ドロップするか、クリックしてファイルを選択してください
-            <input type="file" id="file-input" accept=".json" onchange="handleFileSelect(event)">
+        <h2>⚡ 超高速 JSON エクセル風ビューア By NTTPs</h2>
+        <div class="action-area">
+            <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+                ここにJSONファイルをドラッグ＆ドロップするか、クリックしてファイルを選択してください
+                <input type="file" id="file-input" accept=".json" onchange="handleFileSelect(event)">
+            </div>
+            <!-- CSVダウンロードボタン -->
+            <button id="download-btn" class="download-btn" onclick="downloadCSV()">📥 CSVとしてダウンロード</button>
         </div>
         <div class="stats" id="status-msg">ファイルが選択されていません。</div>
         
-        <!-- 列チェックボックスを表示するエリア -->
         <div class="column-toggle-container" id="col-container">
             <div class="column-toggle-title">🛠️ 表示する列の選択（ヘッダー右クリックでも非表示にできます）：</div>
             <div class="checkbox-group" id="col-checkboxes"></div>
@@ -55,6 +65,7 @@
         let table;
         let valueCounts = {};
         let colorMap = {};
+        let currentFileName = "data.csv"; // デフォルトのダウンロードファイル名
 
         const dropZone = document.getElementById('drop-zone');
         window.addEventListener('dragover', e => e.preventDefault());
@@ -78,6 +89,10 @@
             const start = performance.now();
             document.getElementById('status-msg').innerText = "読み込み中...";
             document.getElementById('col-container').style.display = "none";
+            document.getElementById('download-btn').style.display = "none"; // ボタンを一度隠す
+
+            // 元のファイル名を元に、拡張子を.csvに変更した名前を生成
+            currentFileName = file.name.replace(/\.json$/i, '') + ".csv";
 
             reader.onload = function(e) {
                 try {
@@ -91,6 +106,9 @@
                     const end = performance.now();
                     document.getElementById('status-msg').innerHTML = 
                         `✅ <b>${file.name}</b> (${(file.size/1024/1024).toFixed(2)} MB) - 読み込み完了: <b>${Math.round(end - start)} ms</b>`;
+                    
+                    // 読み込みが完了したらダウンロードボタンを表示
+                    document.getElementById('download-btn').style.display = "block";
                 } catch (err) {
                     alert("JSONのパースに失敗しました: " + err.message);
                     document.getElementById('status-msg').innerText = "エラーが発生しました。";
@@ -144,7 +162,6 @@
             return color;
         }
 
-        // 列のチェックボックスメニューを「確実に」生成する関数
         function buildColumnMenu() {
             const container = document.getElementById('col-container');
             const checkboxGroup = document.getElementById('col-checkboxes');
@@ -154,7 +171,7 @@
             
             columns.forEach(column => {
                 const definition = column.getDefinition();
-                if (definition.rowHeader) return; // 行番号はスキップ
+                if (definition.rowHeader) return;
 
                 const fieldName = definition.field;
 
@@ -164,7 +181,7 @@
                 const checkbox = document.createElement('input');
                 checkbox.type = 'checkbox';
                 checkbox.checked = true;
-                checkbox.id = "chk-" + fieldName; // 連動用ID
+                checkbox.id = "chk-" + fieldName;
 
                 checkbox.addEventListener('change', function() {
                     if (this.checked) {
@@ -182,6 +199,13 @@
             container.style.display = "block";
         }
 
+        // CSVエクスポートを実行する関数
+        function downloadCSV() {
+            if (!table) return;
+            // bom: true を指定してExcelの文字化けを防ぐ
+            table.download("csv", currentFileName, {bom: true});
+        }
+
         function renderTable(data) {
             if (table) table.destroy();
 
@@ -194,10 +218,8 @@
                 movableColumns: true,
                 rowHeader: {formatter:"rownum", headerSort:false, width:50, hozAlign:"center", resizable:false},
                 
-                // 列定義が「確定」した後に実行されるフック（ここなら確実にメニューが作れます）
                 autoColumnsDefinitions: function(definitions) {
                     definitions.forEach(column => {
-                        // 重複色分けのフォーマッター
                         column.formatter = function(cell) {
                             let val = cell.getValue();
                             if (val !== undefined && val !== null && val !== "") {
@@ -211,11 +233,9 @@
                             return val;
                         };
 
-                        // 【追加】ヘッダーを右クリックしたらその列を非表示にする
                         column.headerContext = function(e, col) {
-                            e.preventDefault(); // 通常の右クリックメニューを阻止
+                            e.preventDefault();
                             col.hide();
-                            // 上のチェックボックスのチェックも外す
                             const chk = document.getElementById("chk-" + col.getField());
                             if(chk) chk.checked = false;
                         };
@@ -224,9 +244,8 @@
                 }
             });
 
-            // テーブルにデータがセットされたらメニュー構築を走らせる
             table.on("dataLoaded", function(data){
-                setTimeout(buildColumnMenu, 100); // 描画との競合を防ぐためわずかに遅延
+                setTimeout(buildColumnMenu, 100);
             });
         }
     </script>
