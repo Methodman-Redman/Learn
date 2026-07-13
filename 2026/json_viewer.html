@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>⚡ Super Fast JSON Excel Viewer</title>
+    <!-- TabulatorのCSS/JS -->
+    <link href="https://unpkg.com/tabulator-tables@5.5.2/dist/css/tabulator.min.css" rel="stylesheet">
+    <script type="text/javascript" src="https://unpkg.com/tabulator-tables@5.5.2/dist/js/tabulator.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; background: #f4f6f9; color: #333; }
+        .header-container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        h2 { margin-top: 0; color: #217346; display: flex; align-items: center; gap: 10px; }
+        
+        #drop-zone { border: 2px dashed #217346; padding: 30px; text-align: center; background: #f9fbf9; border-radius: 6px; cursor: pointer; transition: all 0.3s; }
+        #drop-zone.hover { background: #eaf2ed; border-color: #1a5c38; }
+        #file-input { display: none; }
+        
+        .stats { margin-top: 10px; font-size: 14px; color: #666; }
+        
+        /* 列コントロールエリア */
+        .column-toggle-container { margin-top: 15px; padding: 15px; background: #fdfdfd; border: 1px solid #217346; border-radius: 6px; display: none; }
+        .column-toggle-title { font-weight: bold; font-size: 14px; margin-bottom: 10px; color: #217346; }
+        .checkbox-group { display: flex; flex-wrap: wrap; gap: 10px; font-size: 13px; }
+        .checkbox-label { display: flex; align-items: center; gap: 6px; background: #e8f0ec; padding: 6px 10px; border-radius: 4px; cursor: pointer; user-select: none; border: 1px solid #d0e0d8; }
+        .checkbox-label:hover { background: #d8e6df; }
+
+        #table-container { background: white; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); overflow: hidden; }
+        
+        .tabulator { border: none !important; font-size: 13px; }
+        .tabulator-header { background-color: #217346 !important; color: white !important; font-weight: bold; }
+        .tabulator-col { background-color: #217346 !important; border-right: 1px solid #1a5c38 !important; }
+        .tabulator-row:nth-child(even) { background-color: #f8faf8; }
+    </style>
+</head>
+<body>
+
+    <div class="header-container">
+        <h2>⚡ JSON エクセル風ビューア</h2>
+        <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+            ここにJSONファイルをドラッグ＆ドロップするか、クリックしてファイルを選択してください
+            <input type="file" id="file-input" accept=".json" onchange="handleFileSelect(event)">
+        </div>
+        <div class="stats" id="status-msg">ファイルが選択されていません。</div>
+        
+        <!-- 列チェックボックスを表示するエリア -->
+        <div class="column-toggle-container" id="col-container">
+            <div class="column-toggle-title">🛠️ 表示する列の選択（ヘッダー右クリックでも非表示にできます）：</div>
+            <div class="checkbox-group" id="col-checkboxes"></div>
+        </div>
+    </div>
+
+    <div id="table-container"></div>
+
+    <script>
+        let table;
+        let valueCounts = {};
+        let colorMap = {};
+
+        const dropZone = document.getElementById('drop-zone');
+        window.addEventListener('dragover', e => e.preventDefault());
+        window.addEventListener('drop', e => e.preventDefault());
+        
+        dropZone.addEventListener('dragover', () => dropZone.classList.add('hover'));
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('hover'));
+        dropZone.addEventListener('drop', (e) => {
+            dropZone.classList.remove('hover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) processFile(files[0]);
+        });
+
+        function handleFileSelect(e) {
+            const files = e.target.files;
+            if (files.length > 0) processFile(files[0]);
+        }
+
+        function processFile(file) {
+            const reader = new FileReader();
+            const start = performance.now();
+            document.getElementById('status-msg').innerText = "読み込み中...";
+            document.getElementById('col-container').style.display = "none";
+
+            reader.onload = function(e) {
+                try {
+                    let parsed = JSON.parse(e.target.result);
+                    let dataArray = Array.isArray(parsed) ? parsed : [parsed];
+                    
+                    let flattenedData = dataArray.map(item => flattenObject(item));
+                    analyzeDuplicates(flattenedData);
+                    renderTable(flattenedData);
+                    
+                    const end = performance.now();
+                    document.getElementById('status-msg').innerHTML = 
+                        `✅ <b>${file.name}</b> (${(file.size/1024/1024).toFixed(2)} MB) - 読み込み完了: <b>${Math.round(end - start)} ms</b>`;
+                } catch (err) {
+                    alert("JSONのパースに失敗しました: " + err.message);
+                    document.getElementById('status-msg').innerText = "エラーが発生しました。";
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function flattenObject(obj, prefix = '') {
+            let res = {};
+            for (let key in obj) {
+                if (obj.hasOwnProperty(key)) {
+                    let propName = prefix ? `${prefix}_${key}` : key;
+                    if (typeof obj[key] === 'object' && obj[key] !== null && !Array.isArray(obj[key])) {
+                        Object.assign(res, flattenObject(obj[key], propName));
+                    } else {
+                        res[propName] = obj[key];
+                    }
+                }
+            }
+            return res;
+        }
+
+        function analyzeDuplicates(data) {
+            valueCounts = {};
+            colorMap = {};
+            data.forEach(row => {
+                for (let key in row) {
+                    let val = row[key];
+                    if (val !== undefined && val !== null && val !== "") {
+                        let stringVal = String(val);
+                        valueCounts[stringVal] = (valueCounts[stringVal] || 0) + 1;
+                    }
+                }
+            });
+        }
+
+        function getColorForValue(val) {
+            let stringVal = String(val);
+            if (colorMap[stringVal]) return colorMap[stringVal];
+
+            let hash = 0;
+            for (let i = 0; i < stringVal.length; i++) {
+                hash = stringVal.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            let r = Math.abs((hash & 0xFF0000) >> 16) % 75 + 180;
+            let g = Math.abs((hash & 0x00FF00) >> 8) % 75 + 180;
+            let b = Math.abs(hash & 0x0000FF) % 75 + 180;
+            let color = `rgb(${r}, ${g}, ${b})`;
+            colorMap[stringVal] = color;
+            return color;
+        }
+
+        // 列のチェックボックスメニューを「確実に」生成する関数
+        function buildColumnMenu() {
+            const container = document.getElementById('col-container');
+            const checkboxGroup = document.getElementById('col-checkboxes');
+            checkboxGroup.innerHTML = ""; 
+            
+            const columns = table.getColumns();
+            
+            columns.forEach(column => {
+                const definition = column.getDefinition();
+                if (definition.rowHeader) return; // 行番号はスキップ
+
+                const fieldName = definition.field;
+
+                const label = document.createElement('label');
+                label.className = 'checkbox-label';
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.checked = true;
+                checkbox.id = "chk-" + fieldName; // 連動用ID
+
+                checkbox.addEventListener('change', function() {
+                    if (this.checked) {
+                        column.show();
+                    } else {
+                        column.hide();
+                    }
+                });
+
+                label.appendChild(checkbox);
+                label.appendChild(document.createTextNode(fieldName));
+                checkboxGroup.appendChild(label);
+            });
+
+            container.style.display = "block";
+        }
+
+        function renderTable(data) {
+            if (table) table.destroy();
+
+            table = new Tabulator("#table-container", {
+                data: data,
+                autoColumns: true,
+                layout: "fitDataFill",
+                pagination: "local",
+                paginationSize: 50,
+                movableColumns: true,
+                rowHeader: {formatter:"rownum", headerSort:false, width:50, hozAlign:"center", resizable:false},
+                
+                // 列定義が「確定」した後に実行されるフック（ここなら確実にメニューが作れます）
+                autoColumnsDefinitions: function(definitions) {
+                    definitions.forEach(column => {
+                        // 重複色分けのフォーマッター
+                        column.formatter = function(cell) {
+                            let val = cell.getValue();
+                            if (val !== undefined && val !== null && val !== "") {
+                                let stringVal = String(val);
+                                if (valueCounts[stringVal] > 1) {
+                                    let bgColor = getColorForValue(stringVal);
+                                    cell.getElement().style.backgroundColor = bgColor;
+                                    cell.getElement().style.color = "#111";
+                                }
+                            }
+                            return val;
+                        };
+
+                        // 【追加】ヘッダーを右クリックしたらその列を非表示にする
+                        column.headerContext = function(e, col) {
+                            e.preventDefault(); // 通常の右クリックメニューを阻止
+                            col.hide();
+                            // 上のチェックボックスのチェックも外す
+                            const chk = document.getElementById("chk-" + col.getField());
+                            if(chk) chk.checked = false;
+                        };
+                    });
+                    return definitions;
+                }
+            });
+
+            // テーブルにデータがセットされたらメニュー構築を走らせる
+            table.on("dataLoaded", function(data){
+                setTimeout(buildColumnMenu, 100); // 描画との競合を防ぐためわずかに遅延
+            });
+        }
+    </script>
+</body>
+</html>
