@@ -1,5 +1,0 @@
-- `./processkill.sh -p test.elf -p test2.elf -f /path/to/log.txt -f /path/to/log2.txt`
-- `./processkill.sh -p test.elf,test2.elf -f /path/to/log.txt,/path/to/log2.txt`
-- `openssl aes-256-cbc -salt -pbkdf2 -in myscript.sh -out myscript.sh.enc`
-- `openssl aes-256-cbc -d -pbkdf2 -in myscript.sh.enc -out myscript_decrypted.sh`
-- `openssl aes-256-cbc -d -pbkdf2 -in myscript.sh.enc | bash`
