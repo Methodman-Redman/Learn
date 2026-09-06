@@ -489,7 +489,23 @@ eval "$(pyenv init -)"
 - `pip install setuptools==69.5.1`
 - `unipacker`
 
-
+## Unpack
+```
+ UPX (basic support)
+ ASPack
+ FSG
+ Themida (basic support)
+ WinUpack
+ Petite
+ PESpin
+ Armadillo
+ PECompact
+ NSPack
+ MPRESS
+```
+- `https://github.com/orcastor/unpack`
+- `https://github.com/anpa1200/String-Analyzer`
+- `https://github.com/M3rcuryLake/Nyxelf`
 
 
 
