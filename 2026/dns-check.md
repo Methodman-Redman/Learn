@@ -1,11 +1,11 @@
 ## used
-### 実行
+### execute
 - `chmod +x dns-check.sh`
-### 通常のDNS設定を使うなら、
+### Normal DNS
 - `./dns-check.sh domains.txt`
-### DNSサーバーを指定するなら、
+### add DNS Sv
 - `./dns-check.sh domains.txt 8.8.8.8`
-### CSVにも保存するなら、
+### Make csv
 - `./dns-check.sh domains.txt 8.8.8.8 result.csv`
 
 
