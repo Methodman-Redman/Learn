@@ -1,0 +1,201 @@
+## tcpdump
+- `sudo tcpdump -D`
+- FQDN指定
+  - `sudo tcpdump -nn host google.com -i eth0`
+  - `sudo timeout 60 tcpdump -i eth0 -nn host google.com -w /tmp/test.pcap`
+
+- `python3 ja4.py /tmp/test5.pcap -J --ja4x`
+
+- `cargo build --release`
+- `ja4 ~/test4.pcapng --json | jq . | grep ja4x`
+- `sudo rm -f /tmp/t.pcap; sudo timeout 10 tcpdump -U -i eth0 -nn 'tcp port 443' -w /tmp/t.pcap & P=$!; sleep 1; curl -4 -sS --tlsv1.2 --tls-max 1.2 https://google.com/ -o /dev/null; sleep 1; sudo kill "$P" 2>/dev/null; wait "$P" 2>/dev/null; /usr/local/bin/ja4 /tmp/t.pcap -j 2>/dev/null | jq -r '.tls_certs[]?.x509[]?.ja4x // empty'; sudo rm -f /tmp/t.pcap`
+
+- `curl --tlsv1.2 --tls-max 1.2 https://google.com`
+
+## script
+- `/usr/local/bin/ja4`
+
+```
+#!/usr/bin/env python3
+import argparse
+import subprocess
+import time
+import json
+import signal
+import sys
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+DEFAULT_PCAP = "/tmp/t.pcap"
+DEFAULT_INTERFACE = "eth0"
+DEFAULT_THREADS = 1
+
+def run_ja4x_single(url: str, pcap_path: str, interface: str):
+    """単一 URL に対してキャプチャ→JA4X 抽出を実行"""
+    # 古い PCAP を削除
+    subprocess.run(["sudo", "rm", "-f", pcap_path], check=True)
+
+    # tcpdump 起動 (バックグラウンド)
+    tcpdump_cmd = [
+        "sudo", "timeout", "10",
+        "tcpdump", "-U", "-i", interface,
+        "-nn", "tcp port 443",
+        "-w", pcap_path
+    ]
+    tcpdump_proc = subprocess.Popen(tcpdump_cmd)
+
+    # 少し待ってから curl 実行
+    time.sleep(1)
+    curl_cmd = [
+        "curl", "-4", "-sS",
+        "--tlsv1.2", "--tls-max", "1.2",
+        url, "-o", "/dev/null"
+    ]
+    subprocess.run(curl_cmd, check=True)
+    time.sleep(1)
+
+    # tcpdump 終了
+    tcpdump_proc.send_signal(signal.SIGTERM)
+    tcpdump_proc.wait()
+
+    # ja4 コマンド実行
+    ja4_cmd = ["/usr/local/bin/ja4", pcap_path, "-j"]
+    ja4_proc = subprocess.run(ja4_cmd, capture_output=True, text=True)
+
+    # ja4x を抽出
+    ja4x_list = []
+    for line in ja4_proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for cert_chain in data.get("tls_certs", []):
+            for cert in cert_chain.get("x509", []):
+                if "ja4x" in cert:
+                    ja4x_list.append(cert["ja4x"])
+
+    # クリーンアップ
+    subprocess.run(["sudo", "rm", "-f", pcap_path], check=True)
+
+    return url, ja4x_list
+
+def load_fqdns(filepath: str):
+    """FQDN リストファイルから URL を生成"""
+    fqdns = []
+    with open(filepath, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # http/https のプレフィックスがない場合は https を付与
+            if not line.startswith("http://") and not line.startswith("https://"):
+                line = f"https://{line}/"
+            fqdns.append(line)
+    return fqdns
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Capture TLS traffic and extract JA4X fingerprints."
+    )
+    parser.add_argument(
+        "-u", "--url",
+        help="Target URL (e.g., https://google.com/)"
+    )
+    parser.add_argument(
+        "-f", "--file",
+        help="Text file containing FQDNs (one per line)"
+    )
+    parser.add_argument(
+        "-t", "--threads",
+        type=int,
+        default=DEFAULT_THREADS,
+        help=f"Number of parallel threads (default: {DEFAULT_THREADS})"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        help="Output JSON file (default: stdout)"
+    )
+    parser.add_argument(
+        "-i", "--interface",
+        default=DEFAULT_INTERFACE,
+        help=f"Network interface (default: {DEFAULT_INTERFACE})"
+    )
+    args = parser.parse_args()
+
+    if not args.url and not args.file:
+        parser.error("Either -u or -f is required.")
+    if args.url and args.file:
+        parser.error("Cannot specify both -u and -f.")
+
+    # URL リストを準備
+    if args.url:
+        urls = [args.url]
+    else:
+        urls = load_fqdns(args.file)
+
+    results = {}
+    pcap_path = DEFAULT_PCAP
+
+    try:
+        with ThreadPoolExecutor(max_workers=args.threads) as executor:
+            futures = {
+                executor.submit(run_ja4x_single, url, pcap_path, args.interface): url
+                for url in urls
+            }
+            for future in as_completed(futures):
+                url = futures[future]
+                try:
+                    url_result, ja4x_list = future.result()
+                    results[url_result] = ja4x_list
+                    # 即時出力（stdout）
+                    if ja4x_list:
+                        for j in ja4x_list:
+                            print(f"{url_result}\t{j}")
+                    else:
+                        print(f"{url_result}\tNo JA4X", file=sys.stderr)
+                except Exception as e:
+                    print(f"{url}\tError: {e}", file=sys.stderr)
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        sys.exit(130)
+
+    # JSON 出力（オプション）
+    if args.output:
+        with open(args.output, "w") as f:
+            json.dump(results, f, indent=2)
+
+if __name__ == "__main__":
+    main()
+```
+```
+┌──(kali㉿kali)-[~/job]
+└─$ ./pcap-ja4x.py -f fqdn.txt     
+tcpdump: listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+28 packets captured
+28 packets received by filter
+0 packets dropped by kernel
+https://google.com      a373a9f83c6b_7022c563de38_2e3757343cb0
+https://google.com      a373a9f83c6b_a373a9f83c6b_5d71497f7704
+https://google.com      7d5dbb3783b4_a373a9f83c6b_2fbee3f04f3b
+tcpdump: listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+169 packets captured
+169 packets received by filter
+0 packets dropped by kernel
+https://github.com      a373a9f83c6b_7022c563de38_a7d8059b5276
+https://github.com      a373a9f83c6b_a373a9f83c6b_2367ce7fbc5b
+https://github.com      2bab15409345_a373a9f83c6b_2367ce7fbc5b
+tcpdump: listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+30 packets captured
+30 packets received by filter
+0 packets dropped by kernel
+https://example.com     a373a9f83c6b_7022c563de38_509f6d8dff58
+https://example.com     a373a9f83c6b_a373a9f83c6b_69f3e282d725
+https://example.com     a373a9f83c6b_a373a9f83c6b_69f3e282d725
+https://example.com     2bab15409345_a373a9f83c6b_2367ce7fbc5b
+                                                                                                                  
+┌──(kali㉿kali)-[~/job]
+└─$ 
+```
