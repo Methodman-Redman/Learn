@@ -71,7 +71,10 @@ sliver-client
 もしホスト側で ./output 内のファイルが編集できない・削除できないといった権限エラーが出た場合は、手動で mkdir output を作っておくか、作成された後に sudo chown -R $USER:$USER ./output で権限を変更してください。      
 
 
-## 2026
+# 2026
+external: true にした sliver-data は、docker compose down でも docker compose down -v でも削除されません。
+
+ただし、事前に docker volume create sliver-data を実行していない場合、external: true のまま up すると「ボリュームが存在しない」エラーになります。既存の通常の名前付きボリュームを引き継ぐ場合は、まず実名を確認してください。
 ## 既存データがある場合
 - すでに運用しているなら、新しい空のボリュームに切り替えず、既存ボリュームの実名を指定してください。 通常の Compose 管理ボリュームには、既定でプロジェクト名が付くため、実名は sliver-data ではなく プロジェクト名_sliver-data などになっています。
 - まず確認します。
