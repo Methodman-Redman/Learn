@@ -69,3 +69,42 @@ sliver-client
 - ⚠️ Linux環境（Ubuntuなど）での注意点
   - Dockerが自動でフォルダを作成した場合、そのフォルダの所有者が root ユーザーになってしまうことがあります。
 もしホスト側で ./output 内のファイルが編集できない・削除できないといった権限エラーが出た場合は、手動で mkdir output を作っておくか、作成された後に sudo chown -R $USER:$USER ./output で権限を変更してください。      
+
+
+## 2026
+## 既存データがある場合
+- すでに運用しているなら、新しい空のボリュームに切り替えず、既存ボリュームの実名を指定してください。 通常の Compose 管理ボリュームには、既定でプロジェクト名が付くため、実名は sliver-data ではなく プロジェクト名_sliver-data などになっています。
+- まず確認します。
+  ```bash
+  docker volume ls
+  ```
+- 例えば実名が myproject_sliver-data なら、トップレベルの定義を次のように変更します。
+
+```
+cat << 'EOF' > docker-compose.yml
+version: '3.8'
+
+services:
+  sliver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: sliver-server
+    restart: unless-stopped
+    network_mode: host
+
+    volumes:
+      - ./sliver-data:/home/sliver/.sliver
+      - ./output:/home/sliver/output
+
+    tty: true
+    stdin_open: true
+
+volumes:
+  sliver-data:
+    external: true
+    name: myproject_sliver-data
+    
+EOF
+```
